@@ -1,33 +1,54 @@
-#' @title Calculate the parameters of the correlated failure data
-#' @description
-#' Calculate the parameters of the correlated failure data
-#' in the case of the inverse of the independent working matrix or the inverse of the given working matrix.
+
+#' Title Calculate the parameters of the clustered failure data
 #'
-#' @param cluster2 ensure that the first three columns are the ID, deletion status, and expiration time of the cluster failure time, followed by the covariates.
-#' @param corr_inv Inverse of the corresponding working matrix
-#' @param return_ind Return the cumulative hazard function in an independent situation.
+#' @param formula a formula expression, of the form \code{response ~ predictors}. The \code{response} is a \code{Surv} object with right censoring.
+#' @param data a data frame in which to interpret the variables named in the \code{formula}.
+#' @param corrstr a character string specifying the correlation structure. The following are permitted: \code{independence}, \code{def}.
+#' @param corr_matix When corrstr is \code{independence}, it does not need to be specified. When \code{corrstr} is \code{def}, it needs to be specified.When corrstr is independence, it does not need to be specified. When corrstr is def, it needs to be specified.
+#' @param eps tolerance for convergence. The default is \code{eps = 1e-6}
+#' @param itermax specifies the maximum iteration number. If the convergence criterion is not met, the iteration will be stopped after \code{itermax} iterations and
+#' the estimates will be based on the last iteration. The default \code{itermax = 100}.
 #'
 #' @return the coefficient of the covariate, robust variance
 #' @export
+#'
 #' @import Matrix
 #' @importFrom MASS ginv
-#'
-#' @examples sgeeind(data,corr_inv,TRUE)
-sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
-  #library(Matrix)
-  #library(MASS)
-  t2<-cluster2$time
-  c1<-cluster2$cens
-  #xxx<-matrix(c(cluster2$Gender,cluster2$Decayed ,cluster2$bleed_ave,cluster2$Smoking, cluster2$sAge),dim(cluster2)[1],5)
-  #loadmid = as.matrix(cluster2[,c(4:ncol(cluster2))])
-  loadmid = as.matrix(cluster2[, -c(1:3)])
-  xxx = matrix(loadmid,nrow(loadmid),ncol(loadmid))
+#' @importFrom survival Surv
+sgeecorr= function(formula, data,corrstr = "independence" ,corr_matix=NULL,eps = 1e-06,itermax =100){
+
+  if (!requireNamespace("survival", quietly = TRUE)) {
+    stop("Package 'survival' is required but not installed.")
+  }
+
+  mf <- stats::model.frame(formula, data)
+
+  Covariates<- stats::model.matrix(attr(mf, "terms"), mf)[,-1]
+  beta_name <- colnames(Covariates)
+  Y <- stats::model.extract(mf, "response")
+
+  if (!inherits(Y, "Surv")) {
+    stop("The response variable must be a 'Surv' object.")
+  }
+  time <- Y[, 1]
+  cens <- Y[, 2]
+
+
+  cluster2= data
+  t2<- time
+  c1<- cens
+  xxx = matrix(Covariates,nrow(Covariates),ncol(Covariates))
 
   id<-cluster2$id
 
   K=length(unique(id))
   n=length(id)/K
-  matrix_inverse_estimated = corr_inv
+  if(corrstr =="independence"){
+    matrix_inverse_estimated = diag(n)
+  }
+  else if(corrstr =="def"){
+    matrix_inverse_estimated = ginv(corr_matix)
+  }
   cens=c1
 
   t11=sort(t2)
@@ -44,16 +65,10 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
   X1=xxx
   Y1=matrix(cluster2$cens,ncol=1)
 
-  ###################
 
+  betainit = matrix(rep(0,ncol(X1)),ncol=1)
+  beta2 = matrix(rep(0,ncol(X1)),ncol=1)
 
-  # betainit=matrix(c(-0.425,0.341,-0.846),ncol=1)
-
-  betainit=matrix(c(0,0,0,0),ncol=1)
-  #betainit = matrix(coxphresult$coef,ncol=1)
-
-  beta2=matrix(c(0,0,0,0),ncol=1)
-  #beta2 = matrix(coxphresult$coef,ncol=1)
   gSSS1=rep(0,kk)
   KK1=1
 
@@ -108,8 +123,8 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
     W1=diag(Lambda)
 
     SK1=1
-    beta1=matrix(c(0,0,0,0),ncol=1)
-    #beta1 = matrix(coxphresult$coef,ncol=1)
+    beta1 =  matrix(rep(0,ncol(X1)),ncol=1)
+
 
 
     repeat{
@@ -120,7 +135,6 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
       rres=0
 
       pphi=(sum(res^2)/(K*n-dim(X1)[2]))
-      #  pphi=1
 
       res=matrix(res,ncol=K)
       res=t(res)
@@ -129,9 +143,7 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
         for(j in 1:(n-1))
           rres=rres+res[i,j]*sum(res[i,(j+1):n])
       }
-
       rho=(pphi^(-1))*rres/(K*n*(n-1)/2-dim(X1)[2])
-      #  rho=0
 
       SK=1
 
@@ -142,12 +154,8 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
 
         S1=newY1-mu
 
-        #R1=matrix(rho,n,n)
-        #diag(R1)=1
-        #####################################，使用估计的相关结构
-        #R1 = diag(n)
         R1 = ginv(matrix_inverse_estimated)
-        #############################################
+
         V1=sqrt(diag(mu[id==1,]))%*%R1%*%sqrt(diag(mu[id==1,]))*pphi
         for(i in 2:K)
         { V1=bdiag(V1,sqrt(diag(mu[id==i,]))%*%R1%*%sqrt(diag(mu[id==i,]))*pphi) }
@@ -155,9 +163,9 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
         V1=as.matrix(V1)
         Z1=D1%*%betainit+S1
 
-        geebeta=solve(t(D1)%*%solve(V1)%*%W1%*%D1)%*%t(D1)%*%solve(V1)%*%W1%*%Z1
+        geebeta=ginv(t(D1)%*%ginv(V1)%*%W1%*%D1)%*%t(D1)%*%ginv(V1)%*%W1%*%Z1
 
-        if(any(abs(geebeta-betainit)>1e-6) && (SK<=500))
+        if(any(abs(geebeta-betainit)>eps) && (SK<=500))
         {
           betainit<-geebeta
           mu=exp(X1%*%betainit)
@@ -169,10 +177,9 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
 
 
 
-      if(any(abs(betainit-beta1)>0.000001) && (SK1<30))
+      if(any(abs(betainit-beta1)>eps) && (SK1<30))
 
       {  beta1=betainit
-      # mu=exp(X1%*%betainit)
       SK1=SK1+1
       }
 
@@ -180,12 +187,13 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
     }
 
 
-    if (any(abs(betainit-beta2)>0.000001) || any(abs(gSS1-gSSS1)>0.000001) )
+    if ((any(abs(betainit-beta2)>eps) || any(abs(gSS1-gSSS1)>eps) ) && KK1<=itermax)
     {
       beta2<-betainit
       gSSS1<-gSS1
-      # Lambda<-gSS3
-      print(c(KK1, betainit))
+      if(KK1%%5==0){
+        print(c(KK1, betainit))
+      }
       KK1<-KK1+1
     }
 
@@ -193,7 +201,7 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
     else  break
   }
 
-
+  print(c(KK1, betainit))
 
 
 
@@ -207,23 +215,14 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
   #  for beta variance
   ###
 
-  betacorr=rho
-  # betascale=pphi
   betascale=1
-  # betacorr=0
-
   be=betainit
   gS=c(gSS[1],gSS[2:kk]-gSS[1:(kk-1)])
 
   gg1=rep(1,K*n)
   xxxx=xxx
 
-  #  weight1=Lambda
-
-  #Q1=matrix(betacorr,n,n)
-  #diag(Q1)=1
-  #IQ1=solve(Q1)
-  #######################################,使用估计的出来的相关性结构和逆
+  #######################################
   Q1 = ginv(matrix_inverse_estimated)
   IQ1 = matrix_inverse_estimated
 
@@ -280,15 +279,6 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
 
   sdm=VA1
 
-  #  BBC=rep(0,(kk))
-
-  #  for(s in 1:(kk))
-  #   {
-  #      BCm=gS[s]*exp(be*xxxx[(c1==1)&(t2==tt1[s])])
-  #      BBC[s]=sum(exp(be*xxxx[(c1==1)&(t2==tt1[s])])*(exp(-BCm)+BCm*exp(-BCm)-1)/((1-exp(-BCm))^2)*xxxx[(c1==1)&(t2==tt1[s])])+
-  #             sum(gg1[t2>=tt1[s]]*exp(be*xxxx[t2>=tt1[s]])*xxxx[t2>=tt1[s]])
-  #   }
-
   BBC=matrix(0,kk,dim(xxxx)[2])
 
   for(s in 1:(kk))
@@ -310,25 +300,7 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
     CCC[s]=sum(exp(2*(xxxx[(c1==1)&(t2==tt1[s]),]%*%be)-CCm)/(1-exp(-CCm))^2)
   }
 
-  #  BC=rep(0,kk)
 
-  #  for(s in 1:(kk))
-  #   {
-  #      elem=0
-  #      for(i in 1:K)
-  #        {
-  #           mu22=mu2[id==i,]
-  #           xxx1=xxx[id==i]
-  #           t21=t2[id==i]
-
-  #           for(j in 1:n)
-  #            {
-  #               if(t21[j]>=tt1[s])
-  #               elem=elem+sum(xxx1*((mu22)^(1/2))*((mu22[j])^(-1/2))*IQ1[,j])*mu22[j]*(betascale^(-1))
-  #            }
-  #        }
-  #      BC[s]=elem
-  #   }
 
 
   BC=matrix(0,dim(xxxx)[2],kk)
@@ -384,7 +356,7 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
     c22=c2[id==i]
     C2=(c22/g11)-mu22
 
-    fdv=t(mu22m%*%z22)%*%solve(sqrt(mu22m)%*%Q1%*%sqrt(mu22m)*(betascale))%*%G2%*%C2
+    fdv=t(mu22m%*%z22)%*%ginv(sqrt(mu22m)%*%Q1%*%sqrt(mu22m)*(betascale))%*%G2%*%C2
 
     d11=rep(0,(kk))
 
@@ -399,10 +371,10 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
 
   }
 
-  vcmR=solve(M)%*%fdm%*%t(solve(M))
+  vcmR=ginv(M)%*%fdm%*%t(ginv(M))
 
   V1=diag(vcmR)[1:dim(xxx)[2]]
-  V2=(diag(solve(M)))[1:dim(xxx)[2]]
+  V2=(diag(ginv(M)))[1:dim(xxx)[2]]
 
 
 
@@ -412,13 +384,15 @@ sgeeind = function(cluster2, corr_inv,return_ind =TRUE){
   niuCI_lower = betainit-1.96*sqrt(sandv)
   niuCI_upper = betainit+1.96*sqrt(sandv)
   p_value = 2*(1-pnorm(abs(betainit/sqrt(sandv))))
-
-  if(return_ind){
-    df1 = data.frame(t(Lambda))
-    df2 = data.frame(betainit,rho,pphi,KK1,sandv,naivv,niuCI_lower,niuCI_upper)
-    return(dataframe_indepence = cbind(df2, df1))
+  df_Lambda = data.frame(t(Lambda))
+  df_beta = data.frame(betainit,p_value,sandv,rho,pphi,KK1,naivv,niuCI_lower,niuCI_upper)
+  row.names(df_beta) = beta_name
+  print(df_beta)
+  if(corrstr =="independence"){
+    beta_Lambda = list(df_Lambda = df_Lambda,df_beta = df_beta)
+    return(beta_Lambda)
   }
   else{
-    return(dataframe_QU = data.frame(betainit,p_value,sandv,rho,pphi,KK1,naivv,niuCI_lower,niuCI_upper))
+    return(df_beta)
   }
 }
